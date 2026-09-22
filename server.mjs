@@ -11,14 +11,16 @@ const probability = n => typeof n === 'number' && Number.isFinite(n) && n >= 0 &
 export function validAnswers(a) {
   return ['emotion', 'intent'].every(k => a?.[k]?.type === 'choice' && Object.hasOwn(questions[k].criteria, a[k].choice) && probability(a[k].confidence) && Object.keys(questions[k].criteria).every(o => probability(a[k].probabilities?.[o]))) && a?.urgent?.type === 'noul' && probability(a.urgent.noul);
 }
-export function createApp({ apiKey = process.env.TYPESAFE_API_KEY, fetcher = fetch } = {}) {
+export function createApp({ apiKey = process.env.TYPESAFE_API_KEY, fetcher = fetch, vercel = process.env.VERCEL === '1' } = {}) {
   const json = (res, status, data) => { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(data)); };
   return http.createServer(async (req, res) => {
     try {
       const path = new URL(req.url, 'http://localhost').pathname;
       if (req.method === 'GET' && path === '/api/status') return json(res, 200, { configured: Boolean(apiKey) });
       if (req.method === 'POST' && path === '/api/analyze') {
-        if (req.headers.origin && req.headers.origin !== `http://${req.headers.host}`) return json(res, 403, { error: '허용되지 않은 요청입니다.' });
+        // Vercel terminates HTTPS before forwarding the request to this server.
+        const protocol = vercel || req.socket.encrypted ? 'https' : 'http';
+        if (req.headers.origin && req.headers.origin !== `${protocol}://${req.headers.host}`) return json(res, 403, { error: '허용되지 않은 요청입니다.' });
         if (!(req.headers['content-type'] || '').startsWith('application/json')) return json(res, 415, { error: 'JSON 형식으로 요청해 주세요.' });
         let body = ''; let bytes = 0;
         for await (const chunk of req) { bytes += chunk.length; if (bytes > 20000) { json(res, 413, { error: '입력한 문장이 너무 깁니다.' }); return; } body += chunk; }
@@ -48,4 +50,7 @@ export function createApp({ apiKey = process.env.TYPESAFE_API_KEY, fetcher = fet
     } catch { if (!res.headersSent) json(res, 500, { error: '처리 중 문제가 생겼습니다. 다시 시도해 주세요.' }); else res.end(); }
   });
 }
-if (process.argv[1] === fileURLToPath(import.meta.url)) createApp().listen(Number(process.env.PORT) || 3000, '127.0.0.1', () => console.log(`문장 온도계 → http://localhost:${Number(process.env.PORT) || 3000}`));
+// Vercel imports the entrypoint; local development executes it directly.
+const app = createApp();
+export default app;
+if (process.argv[1] === fileURLToPath(import.meta.url)) app.listen(Number(process.env.PORT) || 3000, '127.0.0.1', () => console.log(`문장 온도계 → http://localhost:${Number(process.env.PORT) || 3000}`));

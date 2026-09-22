@@ -24,3 +24,32 @@ test('upstream errors and malformed answers never become a result', async t => {
     const res = await app.post({ message: 'hello' }); assert.equal(res.status, expected); assert.ok((await res.json()).error);
   }
 });
+
+test('Vercel entrypoint exports a usable HTTP server without opening a port on import', async t => {
+  const { default: app } = await import('../server.mjs');
+  assert.equal(app.listening, false);
+  await new Promise(resolve => app.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => app.close(resolve)));
+  const base = `http://127.0.0.1:${app.address().port}`;
+  for (const path of ['/', '/style.css', '/app.js', '/api/status']) {
+    const response = await fetch(base + path);
+    assert.equal(response.status, 200, path);
+    assert.ok((await response.text()).length > 0);
+  }
+});
+
+test('Vercel accepts its HTTPS origin and rejects foreign or downgraded origins', async t => {
+  const app = await serve(t, { vercel: true, apiKey: 'test-secret', fetcher: async () => Response.json({ answers, model: 'jev-test' }) });
+  const local = new URL((await app.get('/api/status')).url);
+  assert.equal((await app.post({ message: '좋아요' }, { Origin: `https://${local.host}` })).status, 200);
+  for (const origin of [`http://${local.host}`, 'https://foreign.example', 'null']) {
+    assert.equal((await app.post({ message: '좋아요' }, { Origin: origin })).status, 403);
+  }
+});
+
+test('local HTTP works without trusting a spoofed forwarded protocol', async t => {
+  const app = await serve(t, { vercel: false, apiKey: 'test-secret', fetcher: async () => Response.json({ answers, model: 'jev-test' }) });
+  const local = new URL((await app.get('/api/status')).url);
+  assert.equal((await app.post({ message: '좋아요' }, { Origin: local.origin })).status, 200);
+  assert.equal((await app.post({ message: '좋아요' }, { Origin: `https://${local.host}`, 'X-Forwarded-Proto': 'https' })).status, 403);
+});
